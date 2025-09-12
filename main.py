@@ -96,11 +96,11 @@ def check_news_job():
     logging.info("شروع چرخه بررسی اخبار...")
     try:
         with open(URL_FILE, 'r') as f:
-            urls = [line.strip() for line in f if line.strip() and not line.startswith('#')]
+            urls_to_check = [line.strip() for line in f if line.strip() and not line.startswith('#')]
     except FileNotFoundError:
         logging.warning("فایل urls.txt پیدا نشد!")
         urls = []
-for url in urls:
+for url in urls_to_check:
         logging.info(f"در حال بررسی سایت: {url}")
         try:
             feed = feedparser.parse(url)
