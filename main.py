@@ -128,7 +128,7 @@ for url in urls:
             logging.error(f"خطای جدی در پردازش فید {url}: {e}")
             continue
 
-    logging.info("پایان یک چرخه بررسی.")
+                    logging.info("پایان یک چرخه بررسی.")
 
 if name == "__main__":
     check_news_job() # فقط تابع اصلی را یک بار اجرا می‌کند و تمام
