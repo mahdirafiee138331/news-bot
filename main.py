@@ -100,7 +100,7 @@ def check_news_job():
     except FileNotFoundError:
         logging.warning("فایل urls.txt پیدا نشد!")
         urls = []
-for url in urls_to_check:
+for url in urls:
         logging.info(f"در حال بررسی سایت: {url}")
         try:
             feed = feedparser.parse(url)
