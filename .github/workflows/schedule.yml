@@ -1,0 +1,31 @@
+name: Run Telegram RSS Bot
+
+on:
+  schedule:
+    # هر ۶ ساعت یک‌بار اجرا می‌شود (به وقت جهانی)
+    - cron: '0 */6 * * *'
+  workflow_dispatch: # این به شما اجازه می‌دهد که به صورت دستی هم اجرا کنید
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run the bot script
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          ADMIN_CHAT_ID: ${{ secrets.ADMIN_CHAT_ID }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: python main.py
