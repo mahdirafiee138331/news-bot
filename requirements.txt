@@ -1,5 +1,4 @@
-fastapi
-deta
 requests
 feedparser
 google-generativeai
+schedule
