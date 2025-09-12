@@ -1,3 +1,35 @@
+for url in urls: # <-- این خط اصلاح شده است
+        logging.info(f"در حال بررسی سایت: {url}")
+        try:
+            feed = feedparser.parse(url)
+            if not feed or not feed.entries:
+                logging.warning(f"فید برای سایت {url} خالی یا نامعتبر است.")
+                continue
+            
+            for entry in reversed(feed.entries[:15]):
+                entry_link = entry.get('id', entry.link)
+                if last_sent_links.get(url) != entry_link:
+                    title = entry.title
+                    summary = clean_html(entry.summary)
+                    full_content_for_cat = f"Title: {title}. Summary: {summary}"
+                    emojis = categorize_article(full_content_for_cat)
+                    gemini_output = process_with_gemini(title, summary)
+                    message_part = f"{emojis} *{gemini_output}*\n\n[لینک مقاله اصلی]({entry.link})"
+                    send_telegram_message(message_part)
+                    last_sent_links[url] = entry_link
+                    save_data({"last_sent_links": last_sent_links})
+                    logging.info(f"مقاله جدید ارسال شد: {title}")
+                    time.sleep(5)
+                else:
+                    break
+        except Exception as e:
+            logging.error(f"خطای جدی در پردازش فید {url}: {e}")
+            continue
+
+    logging.info("پایان یک چرخه بررسی.")
+
+if name == "__main__":
+    check_news_job()
 # -*- coding: utf-8 -*-
 import os
 import logging
@@ -26,7 +58,7 @@ else:
     logging.error("کلید API جمینای پیدا نشد!")
 
 # --- مسیر فایل‌ها ---
-DB_FILE = "bot_database.json" # در GitHub Actions، این فایل بین اجراها باقی نمی‌ماند
+DB_FILE = "bot_database.json"
 URL_FILE = "urls.txt"
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -40,7 +72,6 @@ KEYWORD_CATEGORIES = {
 }
 
 def load_data():
-    # چون حافظه موقتی است، سعی می‌کنیم فایل را بخوانیم، اگر نبود حافظه خالی می‌سازیم
     if os.path.exists(DB_FILE):
         with open(DB_FILE, 'r') as f:
             return json.load(f)
@@ -88,47 +119,13 @@ def process_with_gemini(title, summary):
         return f"{title}\n\n(پردازش با جمینای ناموفق بود)"
 
 def check_news_job():
-    # این تابع اصلی است که فقط یک بار اجرا می‌شود
-    # ... (کد این تابع دقیقاً مانند قبل است)
     database = load_data()
     last_sent_links = database.get("last_sent_links", {})
     new_articles_found = []
     logging.info("شروع چرخه بررسی اخبار...")
     try:
         with open(URL_FILE, 'r') as f:
-            urls_to_check = [line.strip() for line in f if line.strip() and not line.startswith('#')]
+            urls = [line.strip() for line in f if line.strip() and not line.startswith('#')]
     except FileNotFoundError:
         logging.warning("فایل urls.txt پیدا نشد!")
         urls = []
-for url in urls:
-        logging.info(f"در حال بررسی سایت: {url}")
-        try:
-            feed = feedparser.parse(url)
-            if not feed or not feed.entries:
-                logging.warning(f"فید برای سایت {url} خالی یا نامعتبر است.")
-                continue
-            
-            for entry in reversed(feed.entries[:15]):
-                entry_link = entry.get('id', entry.link)
-                if last_sent_links.get(url) != entry_link:
-                    title = entry.title
-                    summary = clean_html(entry.summary)
-                    full_content_for_cat = f"Title: {title}. Summary: {summary}"
-                    emojis = categorize_article(full_content_for_cat)
-                    gemini_output = process_with_gemini(title, summary)
-                    message_part = f"{emojis} *{gemini_output}*\n\n[لینک مقاله اصلی]({entry.link})"
-                    send_telegram_message(message_part)
-                    last_sent_links[url] = entry_link
-                    save_data({"last_sent_links": last_sent_links})
-                    logging.info(f"مقاله جدید ارسال شد: {title}")
-                    time.sleep(5)
-                else:
-                    break
-        except Exception as e:
-            logging.error(f"خطای جدی در پردازش فید {url}: {e}")
-            continue
-
-logging.info("پایان یک چرخه بررسی.")
-
-if name == "__main__":
-    check_news_job() # فقط تابع اصلی را یک بار اجرا می‌کند و تمام
