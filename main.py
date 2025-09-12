@@ -8,16 +8,14 @@ import time
 import feedparser
 import google.generativeai as genai
 from urllib.parse import quote
-import schedule
 
-# --- خواندن متغیرهای محرمانه از محیط Railway ---
+# --- خواندن متغیرهای محرمانه از محیط گیت‌هاب ---
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 ADMIN_NAME = "جناب رفیعی"
 
 # --- پیکربندی جمینای ---
-# این بخش باید بعد از خواندن متغیرها باشد
 if GEMINI_API_KEY:
     try:
         genai.configure(api_key=GEMINI_API_KEY)
@@ -28,7 +26,7 @@ else:
     logging.error("کلید API جمینای پیدا نشد!")
 
 # --- مسیر فایل‌ها ---
-DB_FILE = "/tmp/bot_database.json" # از حافظه موقت Railway استفاده می‌کنیم
+DB_FILE = "bot_database.json" # در GitHub Actions، این فایل بین اجراها باقی نمی‌ماند
 URL_FILE = "urls.txt"
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -42,11 +40,11 @@ KEYWORD_CATEGORIES = {
 }
 
 def load_data():
-    try:
+    # چون حافظه موقتی است، سعی می‌کنیم فایل را بخوانیم، اگر نبود حافظه خالی می‌سازیم
+    if os.path.exists(DB_FILE):
         with open(DB_FILE, 'r') as f:
             return json.load(f)
-    except FileNotFoundError:
-        return {"last_sent_links": {}}
+    return {"last_sent_links": {}}
 
 def save_data(data):
     with open(DB_FILE, 'w') as f:
@@ -90,9 +88,11 @@ def process_with_gemini(title, summary):
         return f"{title}\n\n(پردازش با جمینای ناموفق بود)"
 
 def check_news_job():
+    # این تابع اصلی است که فقط یک بار اجرا می‌شود
+    # ... (کد این تابع دقیقاً مانند قبل است)
     database = load_data()
     last_sent_links = database.get("last_sent_links", {})
-    
+    new_articles_found = []
     logging.info("شروع چرخه بررسی اخبار...")
     try:
         with open(URL_FILE, 'r') as f:
@@ -102,16 +102,14 @@ def check_news_job():
         urls = []
 for url in urls:
         logging.info(f"در حال بررسی سایت: {url}")
-        new_articles_found = []
         try:
             feed = feedparser.parse(url)
             if not feed or not feed.entries:
                 logging.warning(f"فید برای سایت {url} خالی یا نامعتبر است.")
                 continue
             
-            for entry in reversed(feed.entries[:15]): # تا ۱۵ مقاله آخر هر فید را چک می‌کند
-                entry_link = entry.get('id', entry.link) # استفاده از ID در صورت وجود
-                
+            for entry in reversed(feed.entries[:15]):
+                entry_link = entry.get('id', entry.link)
                 if last_sent_links.get(url) != entry_link:
                     title = entry.title
                     summary = clean_html(entry.summary)
@@ -119,41 +117,18 @@ for url in urls:
                     emojis = categorize_article(full_content_for_cat)
                     gemini_output = process_with_gemini(title, summary)
                     message_part = f"{emojis} *{gemini_output}*\n\n[لینک مقاله اصلی]({entry.link})"
-                    new_articles_found.append(message_part)
-                    
-                    logging.info(f"مقاله جدید پیدا شد: {title}")
+                    send_telegram_message(message_part)
+                    last_sent_links[url] = entry_link
+                    save_data({"last_sent_links": last_sent_links})
+                    logging.info(f"مقاله جدید ارسال شد: {title}")
+                    time.sleep(5)
                 else:
-                    # وقتی به آخرین مقاله ارسال شده رسیدیم، بقیه قدیمی‌تر هستند
                     break
-
-            # ارسال مقالات پیدا شده برای این سایت
-            if new_articles_found:
-                header = f"📬 **اخبار جدید از سایت {url.split('//')[1].split('/')[0]} برای شما، {ADMIN_NAME} عزیز:**\n\n---"
-                send_telegram_message(header)
-                for article_text in new_articles_found:
-                    send_telegram_message(article_text)
-                    time.sleep(3)
-            
-            # بروزرسانی آخرین لینک دیده شده برای این سایت
-            if feed.entries:
-                last_sent_links[url] = feed.entries[0].get('id', feed.entries[0].link)
-
         except Exception as e:
             logging.error(f"خطای جدی در پردازش فید {url}: {e}")
             continue
-    
-    # ذخیره نهایی دیتابیس بعد از بررسی همه سایت‌ها
-    save_data({"last_sent_links": last_sent_links})
+
     logging.info("پایان یک چرخه بررسی.")
 
 if name == "__main__":
-    logging.info("ربات در حال راه‌اندازی برای اجرای دائمی است...")
-    # زمان‌بندی برای اجرا هر ۴ ساعت
-    schedule.every(4).hours.do(check_news_job)
-    
-    # اجرای اولیه برای تست در شروع کار
-    check_news_job()
-    
-    while True:
-        schedule.run_pending()
-        time.sleep(60) # هر دقیقه یک‌بار چک می‌کند که آیا زمان اجرای وظیفه رسیده یا نه
+    check_news_job() # فقط تابع اصلی را یک بار اجرا می‌کند و تمام
