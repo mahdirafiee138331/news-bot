@@ -60,7 +60,6 @@ else:
 # --- مسیر فایل‌ها ---
 DB_FILE = "bot_database.json"
 URL_FILE = "urls.txt"
-
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
 KEYWORD_CATEGORIES = {
