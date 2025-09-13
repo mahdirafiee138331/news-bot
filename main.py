@@ -6,23 +6,27 @@ import re
 import requests
 import time
 import feedparser
-import google.generativeai as genai
-import html as html_lib # استفاده از کتابخانه html برای امنیت بیشتر
+import html as html_lib
+from time import mktime
+from datetime import datetime, timezone, timedelta
+
+# --- کتابخانه‌های هوش مصنوعی ---
+try:
+    from google import genai
+except ImportError:
+    genai = None
+try:
+    from openai import OpenAI as OpenAIClient
+except ImportError:
+    OpenAIClient = None
 
 # --- خواندن متغیرهای محرمانه ---
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-ADMIN_NAME = os.environ.get("ADMIN_NAME", "جناب رفیعی")
-
-# --- پیکربندی جمینای ---
-model = None
-if GEMINI_API_KEY:
-    try:
-        genai.configure(api_key=GEMINI_API_KEY)
-        model = genai.GenerativeModel('gemini-pro')
-    except Exception as e:
-        logging.error(f"خطا در پیکربندی جمینای: {e}")
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY") # کلید جدید برای ChatGPT
+GEMINI_MODEL_ENV = os.environ.get("GEMINI_MODEL")
+OPENAI_MODEL_ENV = os.environ.get("OPENAI_MODEL", "gpt-3.5-turbo")
 
 # --- مسیر فایل‌ها ---
 DB_FILE = "bot_database.json"
@@ -30,6 +34,7 @@ URL_FILE = "urls.txt"
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
+# دسته‌بندی موضوعی
 KEYWORD_CATEGORIES = {
     "🔵": ['نجوم', 'فیزیک', 'کیهان', 'کوانتوم', 'ستاره', 'کهکشان', 'سیاهچاله', 'اخترشناسی', 'سیاره', 'physics', 'astronomy', 'cosmos', 'galaxy', 'planet'],
     "🟡": ['زیست', 'ژنتیک', 'فرگشت', 'dna', 'سلول', 'مولکول', 'بیولوژی', 'تکامل', 'biology', 'evolution', 'genetic'],
@@ -38,13 +43,18 @@ KEYWORD_CATEGORIES = {
     "🟠": ['فلسفه', 'فلسفه علم', 'منطق', 'متافیزیک', 'اخلاق', 'philosophy']
 }
 
+# --- تنظیمات ---
+MAX_AGE_DAYS = 2
+MAX_AGE_SECONDS = MAX_AGE_DAYS * 24 * 60 * 60
+DEFAULT_GEMINI_MODELS = ["gemini-1.5-flash", "gemini-1.5-pro"]
+
+# --- توابع کمکی ---
 def load_data():
     if os.path.exists(DB_FILE):
         try:
             with open(DB_FILE, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except (json.JSONDecodeError, FileNotFoundError):
-            logging.warning("فایل دیتابیس خراب یا پیدا نشد. یک فایل جدید ساخته می‌شود.")
             return {"last_sent_links": {}}
     return {"last_sent_links": {}}
 
@@ -67,56 +77,82 @@ def categorize_article(text):
     return emojis if emojis else "📰"
 
 def send_telegram_message(text):
+    # ... (کد این تابع مانند نسخه استاد باقی می‌ماند)
     if not TELEGRAM_BOT_TOKEN or not ADMIN_CHAT_ID:
         logging.error("توکن تلگرام یا شناسه ادمین تنظیم نشده است.")
         return False
-
     send_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": ADMIN_CHAT_ID,
-        "text": text,
-        "parse_mode": "HTML",
-    }
+    payload = {"chat_id": ADMIN_CHAT_ID, "text": text, "parse_mode": "HTML"}
     try:
-        r = requests.post(send_url, json=payload, timeout=15)
-        logging.info("Telegram send status: %s", r.status_code)
+        r = requests.post(send_url, json=payload, timeout=20)
         logging.info("Telegram response: %s", r.text)
         r.raise_for_status()
         return True
+    except Exception:
+        logging.warning("ارسال با HTML ناموفق بود، تلاش مجدد بدون فرمت...")
+        payload['parse_mode'] = None
+        try:
+            r = requests.post(send_url, json=payload, timeout=20)
+            r.raise_for_status()
+            return True
+        except Exception as inner_e:
+            logging.error(f"ارسال به صورت متن ساده هم ناموفق بود: {inner_e}")
+            return False
+
+# --- توابع هوش مصنوعی ---
+def openai_fallback(title, summary):
+    if not OpenAIClient or not OPENAI_API_KEY:
+        logging.warning("کتابخانه یا کلید OpenAI در دسترس نیست.")
+        return None
+    try:
+        client = OpenAIClient(api_key=OPENAI_API_KEY)
+        system_prompt = "You are an expert Persian science communicator. First, translate the user's article title to Persian. Then, on a new line, provide a simple, conceptual explanation of the article in 2-4 Persian sentences."
+        user_content = f"Title: {title}\nSummary: {summary}"
+        response = client.chat.completions.create(
+            model=OPENAI_MODEL_ENV,
+            messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_content}]
+        )
+        return response.choices[0].message.content
     except Exception as e:
-        logging.error(f"خطا در ارسال پیام تلگرام: {e}")
-        return False
+        logging.error(f"فال‌بک OpenAI ناموفق بود: {e}")
+        return None
 
 def process_with_gemini(title, summary):
-    if model is None:
-        logging.warning("مدل جمینای مقداردهی نشده؛ خروجی fallback ارسال می‌شود.")
-        return f"<b>{html_lib.escape(title)}</b>\n\n(پردازش با جمینای در دسترس نیست)"
+    if not genai or not GEMINI_API_KEY:
+        logging.warning("کتابخانه یا کلید Gemini در دسترس نیست. تلاش برای فال‌بک...")
+        return openai_fallback(title, summary)
 
     try:
+        client = genai.Client(api_key=GEMINI_API_KEY)
         prompt = (
-            "You are an expert science communicator. Your task is to perform two steps based on the following English text:\n"
-            "1. Provide a fluent and professional Persian translation of ONLY the title.\n"
-            "2. After the title, explain the core concept of the article in a few simple and conceptual Persian sentences, as if you are explaining it to an expert student (like شاگردم in Persian).\n\n"
-            f"Title: '{title}'\n"
-            f"Summary: '{summary}'\n\n"
-            "Your final output must be in Persian and structured exactly like this:\n"
-            "[Persian Title]\n\n"
-            "[Simple and conceptual Persian explanation]"
+            "You are an expert science communicator. Perform two steps based on the English text:\n"
+            "1) Provide a fluent and professional Persian translation of ONLY the title.\n"
+            "2) After the title, explain the core concept of the article in a few simple and conceptual Persian sentences.\n\n"
+            f"Title: '{title}'\nSummary: '{summary}'\n\n"
+            "Output exactly in Persian. Structure:\n[Persian Title]\n\n[Persian explanation]"
         )
-        response = model.generate_content(prompt)
-        return response.text
+        models_to_try = [GEMINI_MODEL_ENV] if GEMINI_MODEL_ENV else DEFAULT_GEMINI_MODELS
+        for model_name in models_to_try:
+            try:
+                model = client.get_model(f"models/{model_name}")
+                response = model.generate_content(prompt)
+                return response.text
+            except Exception as e:
+                logging.warning(f"مدل {model_name} ناموفق بود: {e}")
+        raise RuntimeError("تمام مدل‌های جمینای ناموفق بودند.")
     except Exception as e:
-        logging.error(f"خطا در ارتباط با جمینای: {e}")
-        return f"<b>{html_lib.escape(title)}</b>\n\n(پردازش با جمینای ناموفق بود)"
+        logging.error(f"خطای کلی در ارتباط با جمینای: {e}. تلاش برای فال‌بک با OpenAI...")
+        return openai_fallback(title, summary)
 
+# --- تابع اصلی ربات ---
 def check_news_job():
     database = load_data()
     last_sent_links = database.get("last_sent_links", {})
-    
+
     logging.info("شروع چرخه بررسی اخبار...")
     try:
         with open(URL_FILE, 'r', encoding='utf-8') as f:
-            urls = [line.strip() for line in f if line.strip() and not line.startswith('#')]
+            urls = {line.strip() for line in f if line.strip() and not line.startswith('#')}
     except FileNotFoundError:
         logging.warning("فایل urls.txt پیدا نشد!")
         urls = []
@@ -128,37 +164,38 @@ def check_news_job():
             if not feed or not feed.entries:
                 logging.warning(f"فید برای سایت {url} خالی یا نامعتبر است.")
                 continue
-            
+
             for entry in reversed(feed.entries[:15]):
+                entry_date_parsed = entry.get("published_parsed") or entry.get("updated_parsed")
+                if entry_date_parsed:
+                    entry_date = datetime.fromtimestamp(mktime(entry_date_parsed)).replace(tzinfo=timezone.utc)
+                    if datetime.now(timezone.utc) - entry_date > timedelta(days=MAX_AGE_DAYS):
+                        continue
+
                 entry_id = entry.get('id', entry.link)
                 if last_sent_links.get(url) == entry_id:
                     continue
-                
+
                 title = entry.get("title", "(بدون عنوان)")
                 summary = clean_html(entry.get("summary", "") or entry.get("description", ""))
-                full_content_for_cat = f"Title: {title}. Summary: {summary}"
-                emojis = categorize_article(full_content_for_cat)
-                
-                gemini_output_raw = process_with_gemini(title, summary)
-                # آماده‌سازی متن برای ارسال به صورت HTML
-                gemini_output_escaped = html_lib.escape(gemini_output_raw)
-                message_part = f"{emojis} <b>{gemini_output_escaped.splitlines()[0]}</b>\n\n"
-                if len(gemini_output_escaped.splitlines()) > 1:
-                    message_part += "\n".join(gemini_output_escaped.splitlines()[1:])
-                
-                message_part += f"\n\n🔗 <a href='{html_lib.escape(entry.link)}'>لینک مقاله اصلی</a>"
+
+                gemini_output = process_with_gemini(title, summary)
+                if not gemini_output:
+                    gemini_output = f"<b>{html_lib.escape(title)}</b>\n\n(پردازش با هوش مصنوعی ناموفق بود)"
+
+                emojis = categorize_article(f"Title: {title}. Summary: {summary}")
+                message_part = f"{emojis} {gemini_output}\n\n🔗 <a href='{html_lib.escape(entry.link)}'>لینک مقاله اصلی</a>"
 
                 if send_telegram_message(message_part):
                     last_sent_links[url] = entry_id
                     logging.info(f"مقاله جدید ارسال شد: {title}")
                     time.sleep(5)
                 else:
-                    logging.error(f"ارسال پیام برای مقاله {title} ناموفق بود.")
                     break
         except Exception as e:
             logging.error(f"خطای جدی در پردازش فید {url}: {e}")
             continue
-    
+
     save_data({"last_sent_links": last_sent_links})
     logging.info("پایان یک چرخه بررسی.")
 
