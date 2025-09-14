@@ -10,7 +10,7 @@ import html as html_lib
 from time import mktime
 from datetime import datetime, timezone, timedelta
 
-# --- کتابخانه‌های هوش مصنوعی ---
+# --- کتابخانه‌های هوش مصنوعی (اختیاری) ---
 try:
     from google import genai
 except ImportError:
@@ -24,7 +24,7 @@ except ImportError:
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY") # کلید جدید برای ChatGPT
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 GEMINI_MODEL_ENV = os.environ.get("GEMINI_MODEL")
 OPENAI_MODEL_ENV = os.environ.get("OPENAI_MODEL", "gpt-3.5-turbo")
 
@@ -76,37 +76,47 @@ def categorize_article(text):
             emojis += emoji
     return emojis if emojis else "📰"
 
+def entry_age_seconds(entry):
+    t = entry.get("published_parsed") or entry.get("updated_parsed")
+    if t:
+        entry_ts = mktime(t)
+        now_ts = time.time()
+        return now_ts - entry_ts
+    return -1 # -۱ یعنی تاریخ موجود نیست
+
+# --- توابع ارسال و هوش مصنوعی ---
 def send_telegram_message(text):
-    # ... (کد این تابع مانند نسخه استاد باقی می‌ماند)
     if not TELEGRAM_BOT_TOKEN or not ADMIN_CHAT_ID:
         logging.error("توکن تلگرام یا شناسه ادمین تنظیم نشده است.")
         return False
-    send_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": ADMIN_CHAT_ID, "text": text, "parse_mode": "HTML"}
     try:
-        r = requests.post(send_url, json=payload, timeout=20)
+        r = requests.post(url, json=payload, timeout=20)
         logging.info("Telegram response: %s", r.text)
         r.raise_for_status()
         return True
-    except Exception:
-        logging.warning("ارسال با HTML ناموفق بود، تلاش مجدد بدون فرمت...")
-        payload['parse_mode'] = None
-        try:
-            r = requests.post(send_url, json=payload, timeout=20)
-            r.raise_for_status()
-            return True
-        except Exception as inner_e:
-            logging.error(f"ارسال به صورت متن ساده هم ناموفق بود: {inner_e}")
-            return False
+    except requests.exceptions.HTTPError as e:
+        if "can't parse entities" in e.response.text:
+            logging.warning("خطای Parse_mode، تلاش برای ارسال به صورت متن ساده...")
+            payload.pop('parse_mode', None)
+            try:
+                r = requests.post(url, json=payload, timeout=20)
+                r.raise_for_status()
+                return True
+            except Exception as inner_e:
+                logging.error(f"ارسال به صورت متن ساده هم ناموفق بود: {inner_e}")
+        return False
+    except Exception as e:
+        logging.error(f"خطای کلی در ارسال پیام تلگرام: {e}")
+        return False
 
-# --- توابع هوش مصنوعی ---
 def openai_fallback(title, summary):
     if not OpenAIClient or not OPENAI_API_KEY:
-        logging.warning("کتابخانه یا کلید OpenAI در دسترس نیست.")
         return None
     try:
         client = OpenAIClient(api_key=OPENAI_API_KEY)
-        system_prompt = "You are an expert Persian science communicator. First, translate the user's article title to Persian. Then, on a new line, provide a simple, conceptual explanation of the article in 2-4 Persian sentences."
+        system_prompt = "You are a Persian science communicator. First, translate the user's article title to Persian. Then, on a new line, provide a simple, conceptual explanation of the article in 2-4 Persian sentences."
         user_content = f"Title: {title}\nSummary: {summary}"
         response = client.chat.completions.create(
             model=OPENAI_MODEL_ENV,
@@ -121,16 +131,9 @@ def process_with_gemini(title, summary):
     if not genai or not GEMINI_API_KEY:
         logging.warning("کتابخانه یا کلید Gemini در دسترس نیست. تلاش برای فال‌بک...")
         return openai_fallback(title, summary)
-
     try:
         client = genai.Client(api_key=GEMINI_API_KEY)
-        prompt = (
-            "You are an expert science communicator. Perform two steps based on the English text:\n"
-            "1) Provide a fluent and professional Persian translation of ONLY the title.\n"
-            "2) After the title, explain the core concept of the article in a few simple and conceptual Persian sentences.\n\n"
-            f"Title: '{title}'\nSummary: '{summary}'\n\n"
-            "Output exactly in Persian. Structure:\n[Persian Title]\n\n[Persian explanation]"
-        )
+        prompt = "You are an expert science communicator. Perform two steps based on the English text:\n1) Provide a fluent and professional Persian translation of ONLY the title.\n2) After the title, explain the core concept of the article in a few simple and conceptual Persian sentences.\n\nTitle: '{title}'\nSummary: '{summary}'\n\nOutput exactly in Persian. Structure:\n[Persian Title]\n\n[Persian explanation]".format(title=title, summary=summary)
         models_to_try = [GEMINI_MODEL_ENV] if GEMINI_MODEL_ENV else DEFAULT_GEMINI_MODELS
         for model_name in models_to_try:
             try:
@@ -148,7 +151,6 @@ def process_with_gemini(title, summary):
 def check_news_job():
     database = load_data()
     last_sent_links = database.get("last_sent_links", {})
-
     logging.info("شروع چرخه بررسی اخبار...")
     try:
         with open(URL_FILE, 'r', encoding='utf-8') as f:
@@ -165,37 +167,43 @@ def check_news_job():
                 logging.warning(f"فید برای سایت {url} خالی یا نامعتبر است.")
                 continue
 
-            for entry in reversed(feed.entries[:15]):
-                entry_date_parsed = entry.get("published_parsed") or entry.get("updated_parsed")
-                if entry_date_parsed:
-                    entry_date = datetime.fromtimestamp(mktime(entry_date_parsed)).replace(tzinfo=timezone.utc)
-                    if datetime.now(timezone.utc) - entry_date > timedelta(days=MAX_AGE_DAYS):
-                        continue
-
+            last_sent_id_for_url = last_sent_links.get(url)
+            new_articles_to_send = []
+            
+            for entry in feed.entries:
                 entry_id = entry.get('id', entry.link)
-                if last_sent_links.get(url) == entry_id:
+                if not entry_id: continue
+                if entry_id == last_sent_id_for_url:
+                    break
+                new_articles_to_send.append(entry)
+
+            for entry in reversed(new_articles_to_send):
+                age_sec = entry_age_seconds(entry)
+                if age_sec != -1 and age_sec > MAX_AGE_SECONDS:
+                    logging.info(f"رد کردن مقاله قدیمی: {entry.get('title')}")
                     continue
 
                 title = entry.get("title", "(بدون عنوان)")
                 summary = clean_html(entry.get("summary", "") or entry.get("description", ""))
-
-                gemini_output = process_with_gemini(title, summary)
-                if not gemini_output:
-                    gemini_output = f"<b>{html_lib.escape(title)}</b>\n\n(پردازش با هوش مصنوعی ناموفق بود)"
+                
+                ai_output = process_with_gemini(title, summary)
+                if not ai_output:
+                    ai_output = f"<b>{html_lib.escape(title)}</b>\n\n(پردازش با هوش مصنوعی ناموفق بود)"
 
                 emojis = categorize_article(f"Title: {title}. Summary: {summary}")
-                message_part = f"{emojis} {gemini_output}\n\n🔗 <a href='{html_lib.escape(entry.link)}'>لینک مقاله اصلی</a>"
+                message_part = f"{emojis} {ai_output}\n\n🔗 <a href='{html_lib.escape(entry.link)}'>لینک مقاله اصلی</a>"
 
                 if send_telegram_message(message_part):
-                    last_sent_links[url] = entry_id
+                    last_sent_links[url] = entry.get('id', entry.link)
                     logging.info(f"مقاله جدید ارسال شد: {title}")
                     time.sleep(5)
                 else:
+                    logging.error(f"ارسال پیام برای مقاله {title} ناموفق بود.")
                     break
         except Exception as e:
             logging.error(f"خطای جدی در پردازش فید {url}: {e}")
             continue
-
+    
     save_data({"last_sent_links": last_sent_links})
     logging.info("پایان یک چرخه بررسی.")
 
