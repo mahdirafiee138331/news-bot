@@ -1,5 +1,5 @@
 requests
 feedparser
 google-generativeai
-schedule
 openai
+schedule
