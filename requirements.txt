@@ -1,5 +1,5 @@
 requests
 feedparser
-google-genai    # یا google-generativeai بسته به انتخابت
+google-genai   # یا google-generativeai حسب استفاده
 openai
 schedule
