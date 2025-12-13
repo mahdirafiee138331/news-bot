@@ -6,17 +6,25 @@ import html
 import time
 from datetime import datetime, timedelta, timezone
 import google.generativeai as genai
+from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
-# --- تنظیمات ---
-# کلید شما
+# --- کلید و تنظیمات ---
 GEMINI_API_KEY = "AIzaSyD_N69KfteuikbJtVZS_XJqPn_399MHeGA"
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN") 
 ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID")
 URL_FILE = "urls.txt"
 
-# تنظیم دقیقا مثل کد قدیمی (gemini-pro)
+# استفاده از مدل فلش (سریع و جدید)
 genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel("gemini-pro")
+model = genai.GenerativeModel(
+    "gemini-1.5-flash",
+    safety_settings={
+        HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+        HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+        HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+        HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+    }
+)
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 
@@ -35,31 +43,35 @@ def send_telegram_message(text):
         logging.error(f"Telegram Error: {e}")
 
 def process_article_with_ai(title, summary):
-    # پرامپت ساده
     prompt = (
-        f"Translate title to Persian and summarize in 2 lines:\n"
+        f"Translate title to Persian and summarize in 2 sentences:\n"
         f"Title: {title}\n"
         f"Summary: {summary}\n"
-        f"Format:\nTitle: ...\nExplanation: ..."
+        f"Format:\nTitle: [Persian Title]\nExplanation: [Persian Text]"
     )
     try:
         response = model.generate_content(prompt)
         text = response.text.strip()
         
-        # تلاش برای تمیز کردن خروجی
         title_fa = title
         expl_fa = text
         
-        for line in text.split('\n'):
+        lines = text.split('\n')
+        for line in lines:
             if "Title:" in line or "تیتر:" in line:
                 title_fa = line.split(":", 1)[1].strip()
             if "Explanation:" in line or "توضیح:" in line:
                 expl_fa = line.split(":", 1)[1].strip()
-                
-        return title_fa.replace("*", ""), expl_fa.replace("Explanation:", "")
+        
+        # اگر مدل گیج زد و فرمت رو رعایت نکرد
+        if title_fa == title and len(lines) > 1:
+             title_fa = lines[0]
+             expl_fa = "\n".join(lines[1:])
+
+        return title_fa.replace("*", "").strip(), expl_fa.replace("Explanation:", "").strip()
 
     except Exception as e:
-        return title, f"(خطا در هوش مصنوعی: {e})"
+        return title, f"⚠️ خطا: {str(e)}"
 
 def check_and_send_news():
     try:
@@ -72,14 +84,19 @@ def check_and_send_news():
     for url in urls:
         try:
             feed = feedparser.parse(url)
+            if not feed.entries: continue
+            # فقط ۳ تا خبر اول هر سایت
             for entry in feed.entries[:3]:
                 pub_struct = getattr(entry, "published_parsed", None)
                 if not pub_struct: continue
                 
                 pub_date = datetime(*pub_struct[:6], tzinfo=timezone.utc).astimezone(timezone(timedelta(hours=3, minutes=30)))
                 
-                if pub_date < time_threshold: continue # قدیمی‌ها رو نریز
-                
+                # اگر قدیمی بود رد شو
+                if pub_date < time_threshold: continue
+                # اگر مال آینده بود (باگ) رد شو
+                if pub_date > get_tehran_time() + timedelta(minutes=10): continue
+
                 title = entry.get("title", "")
                 link = entry.get("link", "")
                 summary = html.unescape(entry.get("summary", ""))
