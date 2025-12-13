@@ -1,5 +1,3 @@
-requests
+google-generativeai
 feedparser
-google-genai   # یا google-generativeai حسب استفاده
-openai
-schedule
+requests
