@@ -6,6 +6,7 @@ import html
 import time
 from datetime import datetime, timedelta, timezone
 import google.generativeai as genai
+from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
 # --- کلید اختصاصی شما ---
 GEMINI_API_KEY = "AIzaSyD_N69KfteuikbJtVZS_XJqPn_399MHeGA"
@@ -13,8 +14,17 @@ GEMINI_API_KEY = "AIzaSyD_N69KfteuikbJtVZS_XJqPn_399MHeGA"
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN") 
 ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID")
 
+# تنظیمات هوش مصنوعی (مدل سریع‌تر + خاموش کردن فیلترها)
 genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel("gemini-1.5-pro")
+model = genai.GenerativeModel(
+    "gemini-1.5-flash",
+    safety_settings={
+        HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+        HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+        HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+        HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+    }
+)
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 URL_FILE = "urls.txt"
@@ -34,19 +44,39 @@ def send_telegram_message(text):
         logging.error(f"Telegram Error: {e}")
 
 def process_article_with_ai(title, summary):
+    # پرامپت ساده‌تر و مستقیم‌تر
     prompt = (
-        f"You are an expert academic assistant. \n"
-        f"Task 1: Translate this title to fluent, academic Persian: '{title}'\n"
-        f"Task 2: Explain the significance in 2-3 Persian sentences based on: '{summary}'\n"
-        f"Output format:\nPersian Title\n\nPersian Explanation"
+        f"Translate the following science news title to Persian and summarize the content in 2 sentences in Persian.\n\n"
+        f"Title: {title}\n"
+        f"Summary: {summary}\n\n"
+        f"Format:\nTitle: [Persian Title]\nExplanation: [Persian Explanation]"
     )
     try:
         response = model.generate_content(prompt)
         text = response.text.strip()
-        parts = text.split('\n\n')
-        return (parts[0].strip(), parts[1].strip()) if len(parts) >= 2 else (parts[0], text)
-    except:
-        return f"ترجمه: {title}", "توضیح: (خطا در هوش مصنوعی)"
+        
+        # استخراج هوشمندانه خروجی
+        title_fa = title
+        expl_fa = text
+        
+        # تلاش برای تمیز کردن خروجی
+        lines = text.split('\n')
+        for line in lines:
+            if line.startswith("Title:") or line.startswith("تیتر:"):
+                title_fa = line.split(":", 1)[1].strip()
+            if line.startswith("Explanation:") or line.startswith("توضیح:"):
+                expl_fa = line.split(":", 1)[1].strip()
+                
+        # اگر مدل فرمت رو رعایت نکرد، کل متن رو به عنوان توضیح برگردون
+        if title_fa == title and len(lines) > 1:
+             title_fa = lines[0]
+             expl_fa = "\n".join(lines[1:])
+
+        return title_fa, expl_fa
+
+    except Exception as e:
+        # اگر خطا داد، متن خطا رو برمی‌گردونیم تا توی تلگرام ببینیم مشکل چیه
+        return f"{title}", f"⚠️ خطا در هوش مصنوعی: {str(e)}"
 
 def check_and_send_news():
     logging.info("Checking news...")
@@ -54,6 +84,7 @@ def check_and_send_news():
         with open(URL_FILE, "r") as f: urls = [l.strip() for l in f if l.strip() and not l.startswith("#")]
     except: return
 
+    # بررسی ۶ ساعت گذشته
     time_threshold = get_tehran_time() - timedelta(hours=6)
     
     for url in urls:
@@ -67,8 +98,11 @@ def check_and_send_news():
                 
                 if pub_date > time_threshold:
                     title, link = entry.get("title", ""), entry.get("link", "")
-                    # پردازش و ارسال
-                    fa_title, fa_expl = process_article_with_ai(title, html.unescape(entry.get("summary", "")))
+                    summary_text = html.unescape(entry.get("summary", ""))
+                    
+                    # پردازش با هوش مصنوعی
+                    fa_title, fa_expl = process_article_with_ai(title, summary_text)
+                    
                     msg = f"⚛️ <b>{html.escape(fa_title)}</b>\n\n{html.escape(fa_expl)}\n\n📅 {pub_date.strftime('%H:%M')}\n🔗 <a href='{link}'>لینک مقاله</a>"
                     send_telegram_message(msg)
                     time.sleep(5)
