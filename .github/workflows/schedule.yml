@@ -2,10 +2,8 @@ name: Science Bot Run
 
 on:
   schedule:
-    # اجرا در ساعت‌های ۳:۳۰، ۷:۳۰، ۱۱:۳۰، ۱۵:۳۰، ۱۹:۳۰ و ۲۳:۳۰ به وقت تهران
-    # (معادل ساعت‌های جهانی: 0, 4, 8, 12, 16, 20)
     - cron: '0 0,4,8,12,16,20 * * *'
-  workflow_dispatch: # این خط اجازه میده دکمه‌ی اجرای دستی داشته باشیم
+  workflow_dispatch:
 
 jobs:
   run-bot:
@@ -19,8 +17,11 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install dependencies
-        run: pip install -r requirements.txt
+      # این بخش تغییر کرد: نصب مستقیم و اجباری نسخه جدید (بدون توجه به حافظه قبلی)
+      - name: Force Install Dependencies
+        run: |
+          pip install --upgrade pip
+          pip install "google-generativeai>=0.8.3" feedparser requests
 
       - name: Run Bot
         env:
