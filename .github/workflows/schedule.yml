@@ -17,11 +17,8 @@ jobs:
         with:
           python-version: '3.10'
 
-      # این بخش تغییر کرد: نصب مستقیم و اجباری نسخه جدید (بدون توجه به حافظه قبلی)
-      - name: Force Install Dependencies
-        run: |
-          pip install --upgrade pip
-          pip install "google-generativeai>=0.8.3" feedparser requests
+      - name: Install dependencies
+        run: pip install -r requirements.txt
 
       - name: Run Bot
         env:
