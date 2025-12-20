@@ -2,6 +2,7 @@ name: Science Bot Run
 
 on:
   schedule:
+    # اجرا هر ۴ ساعت
     - cron: '0 0,4,8,12,16,20 * * *'
   workflow_dispatch:
 
@@ -17,13 +18,17 @@ jobs:
         with:
           python-version: '3.10'
 
+      # --- بخش جادویی: نصب اجباری نسخه جدید ---
       - name: Force Install Latest Libraries
         run: |
           pip install --upgrade pip
-          pip install -U google-generativeai feedparser requests
+          pip install -U "google-generativeai>=0.8.3" feedparser requests
 
       - name: Run Bot
         env:
+          # رمزها رو از تنظیمات میخونه (امنیت ۱۰۰٪)
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           ADMIN_CHAT_ID: ${{ secrets.ADMIN_CHAT_ID }}
+          # کلید جمینای رو هم از اینجا میخونه (نه داخل کد!)
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python main.py
