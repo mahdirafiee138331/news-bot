@@ -8,25 +8,29 @@ from datetime import datetime, timedelta, timezone
 import google.generativeai as genai
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
-# --- کلید و تنظیمات ---
-GEMINI_API_KEY = "AIzaSyD_N69KfteuikbJtVZS_XJqPn_399MHeGA"
+# --- تنظیمات امنیتی (خواندن از Secrets) ---
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN") 
 ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID")
 URL_FILE = "urls.txt"
 
-# استفاده از مدل فلش (سریع و جدید)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
+
+# چک کردن اینکه کلیدها موجود باشن
+if not GEMINI_API_KEY:
+    logging.error("کلید جمینای پیدا نشد! لطفا در Secrets وارد کنید.")
+    exit(1)
+
+# کانفیگ هوش مصنوعی (مدل فلش - سریع و جدید)
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel(
     "gemini-1.5-flash",
     safety_settings={
         HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
         HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
-        HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
         HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
     }
 )
-
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 
 def get_tehran_time():
     return datetime.now(timezone(timedelta(hours=3, minutes=30)))
@@ -43,35 +47,30 @@ def send_telegram_message(text):
         logging.error(f"Telegram Error: {e}")
 
 def process_article_with_ai(title, summary):
-    prompt = (
-        f"Translate title to Persian and summarize in 2 sentences:\n"
-        f"Title: {title}\n"
-        f"Summary: {summary}\n"
-        f"Format:\nTitle: [Persian Title]\nExplanation: [Persian Text]"
-    )
     try:
+        prompt = (
+            f"Translate title to Persian and summarize in 2 sentences:\n"
+            f"Title: {title}\n"
+            f"Summary: {summary}\n"
+            f"Format:\nTitle: [Persian]\nExplanation: [Persian]"
+        )
+        
         response = model.generate_content(prompt)
         text = response.text.strip()
         
         title_fa = title
         expl_fa = text
         
-        lines = text.split('\n')
-        for line in lines:
+        for line in text.split('\n'):
             if "Title:" in line or "تیتر:" in line:
                 title_fa = line.split(":", 1)[1].strip()
             if "Explanation:" in line or "توضیح:" in line:
                 expl_fa = line.split(":", 1)[1].strip()
-        
-        # اگر مدل گیج زد و فرمت رو رعایت نکرد
-        if title_fa == title and len(lines) > 1:
-             title_fa = lines[0]
-             expl_fa = "\n".join(lines[1:])
 
         return title_fa.replace("*", "").strip(), expl_fa.replace("Explanation:", "").strip()
 
     except Exception as e:
-        return title, f"⚠️ خطا: {str(e)}"
+        return title, f"⚠️ خطا در هوش مصنوعی: {str(e)}"
 
 def check_and_send_news():
     try:
@@ -85,7 +84,8 @@ def check_and_send_news():
         try:
             feed = feedparser.parse(url)
             if not feed.entries: continue
-            # فقط ۳ تا خبر اول هر سایت
+            
+            # فقط ۳ خبر اول هر سایت
             for entry in feed.entries[:3]:
                 pub_struct = getattr(entry, "published_parsed", None)
                 if not pub_struct: continue
