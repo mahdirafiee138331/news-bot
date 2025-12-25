@@ -1,34 +1,46 @@
-name: Science Bot Run
+name: Check feeds (with DB persistence)
 
 on:
   schedule:
-    # اجرا هر ۴ ساعت
-    - cron: '0 0,4,8,12,16,20 * * *'
+    - cron: '0 */6 * * *'   # هر 6 ساعت (UTC)
   workflow_dispatch:
 
 jobs:
-  run-bot:
+  run:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
+
+      - name: Download previous DB (if exists)
+        uses: actions/download-artifact@v4
+        with:
+          name: bot_db
+          path: .
 
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
 
-      # --- بخش جادویی: نصب اجباری نسخه جدید ---
-      - name: Force Install Latest Libraries
+      - name: Force install required libs
         run: |
-          pip install --upgrade pip
-          pip install -U "google-generativeai>=0.8.3" feedparser requests
+          python -m pip install --upgrade pip
+          pip install -U "google-generativeai>=0.8.3" openai feedparser requests schedule
 
-      - name: Run Bot
+      - name: Run check (one-shot)
         env:
-          # رمزها رو از تنظیمات میخونه (امنیت ۱۰۰٪)
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           ADMIN_CHAT_ID: ${{ secrets.ADMIN_CHAT_ID }}
-          # کلید جمینای رو هم از اینجا میخونه (نه داخل کد!)
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          RUN_ONCE: "1"
         run: python main.py
+
+      - name: Upload DB artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bot_db
+          path: bot_database.json
